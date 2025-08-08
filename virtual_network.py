@@ -15,10 +15,10 @@ class CustomFTPHandler(FTPHandler):
         self.current_filename = None
         self.expected_chunks = 5
         self.received_chunks = 0
-        self.temp_file_path = None
+        self.total_received_size = 0
 
     def on_file_received(self, file_path):
-        """Called when a file or chunk is received via STOR or APPE command."""
+        """Called when a chunk is received via STOR or APPE command."""
         if file_path.endswith("disk_metadata.json"):
             return  # Skip metadata file
 
@@ -43,12 +43,15 @@ class CustomFTPHandler(FTPHandler):
             return
 
         filename = os.path.basename(file_path)
+        final_path = os.path.join(os.path.dirname(file_path), filename)
+
         if chunk_number == 1:
             # Initialize for new file
             self.current_filename = filename
             self.received_chunks = 1
-            self.temp_file_path = os.path.join(os.path.dirname(file_path), f"temp_{filename}")
-            with open(self.temp_file_path, 'wb') as f:
+            self.total_received_size = actual_payload_size
+            # Write first chunk directly to final file
+            with open(final_path, 'wb') as f:
                 f.write(payload)
         else:
             # Validate chunk number and filename
@@ -59,24 +62,28 @@ class CustomFTPHandler(FTPHandler):
                 print(f"Error: Received chunk {chunk_number} out of order, expected {self.received_chunks + 1}")
                 return
             self.received_chunks += 1
-            # Append payload to temporary file
-            with open(self.temp_file_path, 'ab') as f:
+            self.total_received_size += actual_payload_size
+            # Append chunk payload to final file
+            with open(final_path, 'ab') as f:
                 f.write(payload)
 
-        # If all chunks are received, finalize the file
+        # Update virtual_disk with current size
+        self.server.node.virtual_disk[filename] = self.total_received_size
+        self.server.node._save_disk()
+        print(f"Received chunk {chunk_number}/{self.expected_chunks} for {filename}: {self.total_received_size} bytes total")
+
+        # Clean up the temporary chunk file
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass  # File may already be removed by FTP server
+
+        # Finalize if all chunks are received
         if self.received_chunks == self.expected_chunks:
-            final_path = os.path.join(os.path.dirname(file_path), filename)
-            os.rename(self.temp_file_path, final_path)
-            size = os.path.getsize(final_path)
-            self.server.node.virtual_disk[filename] = size
-            self.server.node._save_disk()
-            print(f"Updated virtual_disk with {filename}: {size} bytes")
+            print(f"Completed receiving {filename}: {self.total_received_size} bytes")
             self.current_filename = None
             self.received_chunks = 0
-            self.temp_file_path = None
-
-        # Remove the temporary chunk file
-        os.remove(file_path)
+            self.total_received_size = 0
 
 class VirtualNetwork:
     def __init__(self):
