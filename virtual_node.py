@@ -7,6 +7,17 @@ from pyftpdlib.servers import FTPServer
 import threading
 import tempfile
 
+class CustomFTPHandler(FTPHandler):
+    def on_file_received(self, file_path):
+        """Called when a file is received via STOR command."""
+        filename = os.path.basename(file_path)
+        if filename != "disk_metadata.json":  # Exclude metadata file
+            size = os.path.getsize(file_path)
+            # The VirtualNode instance is attached to the server instance.
+            self.server.node.virtual_disk[filename] = size
+            self.server.node._save_disk()
+            print(f"Updated virtual_disk with {filename}: {size} bytes")
+
 class VirtualNode:
     def __init__(self, name, disk_path, ip_address, ftp_port):
         self.name = name
@@ -92,9 +103,12 @@ class VirtualNode:
         """Start an FTP server for this node."""
         authorizer = DummyAuthorizer()
         authorizer.add_user("user", "password", self.disk_path, perm="elradfmw")
-        handler = FTPHandler
+        handler = CustomFTPHandler
         handler.authorizer = authorizer
         self.ftp_server = FTPServer(("0.0.0.0", self.ftp_port), handler)
+        # Pass the VirtualNode instance to the server instance,
+        # so it can be accessed by the handler.
+        self.ftp_server.node = self
         ftp_thread = threading.Thread(target=self.ftp_server.serve_forever, daemon=True)
         ftp_thread.start()
         print(f"FTP server started on {self.ip_address}:{self.ftp_port}")
