@@ -8,7 +8,7 @@ class VirtualNode:
         self.disk_path = disk_path
         self.ip_address = ip_address
         self.ftp_port = ftp_port
-        self.total_storage = 100 * 1024 * 1024  # 100 MB in bytes
+        self.total_storage = 1024 * 1024 * 1024  # 100 MB in bytes
         self.virtual_disk = {}  # Dictionary to simulate disk (filename: size)
         self.memory = {}  # Dictionary to simulate RAM (variable: value)
         self.is_running = False  # VM running state
@@ -102,7 +102,7 @@ class VirtualNode:
         except ValueError:
             return "Error: Size must be an integer"
         if filename not in self.virtual_disk:
-            if not self._check_storage(size):
+            if not self._check_storage(size * 1024 * 1024):
                 return f"Error: Not enough storage on disk"
             file_path = os.path.join(self.disk_path, filename)
             with open(file_path, 'wb') as f:
@@ -142,7 +142,7 @@ class VirtualNode:
             return f"Error: VM {self.name} is not running"
         try:
             self.memory[var_name] = int(value)  # Store as integer for simplicity
-            return f"Set {var_name} = {value} in memory"
+            return f"Set {var_name} = {value} in memory as an integer"
         except ValueError:
             return f"Error: Value must be an integer"
 
