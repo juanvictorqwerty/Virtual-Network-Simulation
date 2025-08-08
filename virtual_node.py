@@ -167,6 +167,22 @@ class VirtualNode:
             except OSError as e:
                 return f"Error deleting {filename}: {e}"
 
+    def diskprop(self):
+        """Display disk properties: total size in GB, occupied space in MB, free space in MB."""
+        if not self.is_running:
+            return f"Error: VM {self.name} is not running"
+        total_size_bytes = self.total_storage
+        occupied_size_bytes = sum(self.virtual_disk.values())
+        free_size_bytes = total_size_bytes - occupied_size_bytes
+        # Convert to requested units
+        total_size_gb = total_size_bytes / (1024 * 1024 * 1024)  # Bytes to GB
+        occupied_size_mb = occupied_size_bytes / (1024 * 1024)  # Bytes to MB
+        free_size_mb = free_size_bytes / (1024 * 1024)  # Bytes to MB
+        return (f"Disk Properties for {self.name}:\n"
+                f"Total Size: {total_size_gb:.2f} GB\n"
+                f"Occupied Space: {occupied_size_mb:.2f} MB\n"
+                f"Free Space: {free_size_mb:.2f} MB")
+
     def set_var(self, var_name, value):
         """Set a variable in memory."""
         if not self.is_running:
@@ -230,6 +246,8 @@ class VirtualNode:
                     print(self.send(command[1], command[2]))
                 elif cmd == "del" and len(command) == 2:
                     print(self.del_file(command[1]))
+                elif cmd == "diskprop" and len(command) == 1:
+                    print(self.diskprop())
                 elif cmd == "set" and len(command) == 3:
                     print(self.set_var(command[1], command[2]))
                 elif cmd == "get" and len(command) == 2:
@@ -240,7 +258,7 @@ class VirtualNode:
                     print(self.stop())
                     break
                 else:
-                    print("Invalid command. Use: ls, touch <filename> [size], trunc <filename> [size], send <filename> <ip_address>, del <filename|all>, set <var> <value>, get <var>, add <var1> <var2>, stop")
+                    print("Invalid command. Use: ls, touch <filename> [size], trunc <filename> [size], send <filename> <ip_address>, del <filename|all>, diskprop, stop")
             except EOFError:
                 print("\nEOF detected. Stopping VM.")
                 print(self.stop())
