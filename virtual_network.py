@@ -5,6 +5,8 @@ from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
 import threading
 import tempfile
+import math
+import time
 
 class CustomFTPHandler(FTPHandler):
     def on_file_received(self, file_path):
@@ -25,6 +27,8 @@ class VirtualNetwork:
             "192.168.1.3": {"disk_path": "./assets/node3/", "ftp_port": 2123}
         }
         self.ftp_servers = {}
+        self.num_chunks = 5  # Fixed number of chunks
+        self.bandwidth_bytes_per_sec = 100 * 1024 * 1024 // 8  # 100 Mb/s = 12.5 MB/s
 
     def start_ftp_server(self, node, ip_address, ftp_port, disk_path):
         """Start an FTP server for a given node."""
@@ -72,7 +76,7 @@ class VirtualNetwork:
             return False, f"Error checking storage on {target_ip}: {e}"
 
     def send_file(self, filename, source_ip, target_ip, virtual_disk):
-        """Send a file to another node's disk using FTP."""
+        """Send a file to another node's disk using FTP with 5 chunks and 100 Mb/s bandwidth limit."""
         if target_ip not in self.ip_map:
             return f"Error: Target IP {target_ip} not found"
         if source_ip == target_ip:
@@ -81,7 +85,7 @@ class VirtualNetwork:
             return f"Error: File {filename} does not exist"
 
         size = virtual_disk[filename]
-        can_store, error = self.check_target_storage(target_ip, size, 100 * 1024 * 1024)  # 100 MB
+        can_store, error = self.check_target_storage(target_ip, size, 1024 * 1024 * 1024)  # 1 GB
         if not can_store:
             return error
 
@@ -101,12 +105,44 @@ class VirtualNetwork:
                 ftp.quit()
                 os.unlink(temp_file_path)
                 return f"Error: File {filename} already exists on {target_ip}"
-            # Upload file
+
+            # Calculate chunk size (divide file into 5 chunks)
+            chunk_size = math.ceil(size / self.num_chunks)  # Round up to ensure all bytes are sent
+            sent_bytes = 0
+            chunk_count = 0
             with open(temp_file_path, 'rb') as f:
-                ftp.storbinary(f"STOR {filename}", f)
+                while chunk_count < self.num_chunks and sent_bytes < size:
+                    chunk_count += 1
+                    remaining_bytes = size - sent_bytes
+                    current_chunk_size = min(chunk_size, remaining_bytes)  # Last chunk may be smaller
+                    chunk = f.read(current_chunk_size)
+                    if not chunk:
+                        break
+                    # Write chunk to a temporary file
+                    with tempfile.NamedTemporaryFile(delete=False) as chunk_file:
+                        chunk_file.write(chunk)
+                        chunk_file_path = chunk_file.name
+                    # Send chunk
+                    start_time = time.time()
+                    with open(chunk_file_path, 'rb') as cf:
+                        mode = 'STOR' if chunk_count == 1 else 'APPE'
+                        ftp.storbinary(f"{mode} {filename}", cf)
+                    os.unlink(chunk_file_path)
+                    sent_bytes += current_chunk_size
+                    # Calculate time taken and enforce bandwidth limit
+                    elapsed_time = time.time() - start_time
+                    expected_time = current_chunk_size / self.bandwidth_bytes_per_sec
+                    sleep_time = max(0, expected_time - elapsed_time)
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+                    total_time = time.time() - start_time
+                    print(f"Sent chunk {chunk_count}/5 ({current_chunk_size} bytes) for {filename} to {target_ip} in {total_time:.2f} seconds")
+
             ftp.quit()
             os.unlink(temp_file_path)
+            print(f"Completed sending {filename} ({size} bytes) in {chunk_count} chunks to {target_ip}")
             return f"Sent {filename} ({size} bytes) to {target_ip}"
         except Exception as e:
-            os.unlink(temp_file_path)
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
             return f"Error sending file to {target_ip}: {e}"

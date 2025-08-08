@@ -8,7 +8,7 @@ class VirtualNode:
         self.disk_path = disk_path
         self.ip_address = ip_address
         self.ftp_port = ftp_port
-        self.total_storage = 1024 * 1024 * 1024  # 100 MB in bytes
+        self.total_storage = 1024 * 1024 * 1024  # 1 GB in bytes
         self.virtual_disk = {}  # Dictionary to simulate disk (filename: size)
         self.memory = {}  # Dictionary to simulate RAM (variable: value)
         self.is_running = False  # VM running state
@@ -92,7 +92,7 @@ class VirtualNode:
         return "\n".join(f"{name}: {size} bytes" for name, size in self.virtual_disk.items())
 
     def touch(self, filename, size=0):
-        """Create a new file with optional size or update timestamp if it exists."""
+        """Create a new file with optional size (in MB) or update timestamp if it exists."""
         if not self.is_running:
             return f"Error: VM {self.name} is not running"
         try:
@@ -101,21 +101,22 @@ class VirtualNode:
                 return "Error: Size cannot be negative"
         except ValueError:
             return "Error: Size must be an integer"
+        size_bytes = size * 1024 * 1024  # Convert MB to bytes
         if filename not in self.virtual_disk:
-            if not self._check_storage(size * 1024 * 1024):
+            if not self._check_storage(size_bytes):
                 return f"Error: Not enough storage on disk"
             file_path = os.path.join(self.disk_path, filename)
             with open(file_path, 'wb') as f:
-                f.write(b"\0" * size)
-            self.virtual_disk[filename] = size
+                f.write(b"\0" * size_bytes)
+            self.virtual_disk[filename] = size_bytes
             self._save_disk()
-            return f"Created file: {filename} with {size} bytes"
+            return f"Created file: {filename} with {size_bytes} bytes ({size} MB)"
         else:
             os.utime(os.path.join(self.disk_path, filename))
             return f"Updated timestamp for file: {filename}"
 
     def trunc(self, filename, size=0):
-        """Truncate file to specified size or 0 if no size provided."""
+        """Truncate file to specified size (in MB) or 0 if no size provided."""
         if not self.is_running:
             return f"Error: VM {self.name} is not running"
         try:
@@ -124,17 +125,47 @@ class VirtualNode:
                 return "Error: Size cannot be negative"
         except ValueError:
             return "Error: Size must be an integer"
+        size_bytes = size * 1024 * 1024  # Convert MB to bytes
         if filename in self.virtual_disk:
-            if not self._check_storage(size - self.virtual_disk[filename]):
+            if not self._check_storage(size_bytes - self.virtual_disk[filename]):
                 return f"Error: Not enough storage on disk"
             file_path = os.path.join(self.disk_path, filename)
             with open(file_path, 'wb') as f:
-                f.write(b"\0" * size)
-            self.virtual_disk[filename] = size
+                f.write(b"\0" * size_bytes)
+            self.virtual_disk[filename] = size_bytes
             self._save_disk()
-            return f"Truncated {filename} to {size} bytes"
+            return f"Truncated {filename} to {size_bytes} bytes ({size} MB)"
         else:
             return f"File {filename} does not exist"
+
+    def del_file(self, filename):
+        """Delete a specific file or all files from the virtual disk."""
+        if not self.is_running:
+            return f"Error: VM {self.name} is not running"
+        if filename == "all":
+            deleted_files = []
+            for fname in list(self.virtual_disk.keys()):
+                file_path = os.path.join(self.disk_path, fname)
+                try:
+                    os.remove(file_path)
+                    deleted_files.append(fname)
+                except OSError as e:
+                    print(f"Error deleting {fname}: {e}")
+            for fname in deleted_files:
+                del self.virtual_disk[fname]
+            self._save_disk()
+            return f"Deleted {len(deleted_files)} file(s)" if deleted_files else "No files to delete"
+        else:
+            if filename not in self.virtual_disk:
+                return f"Error: File {filename} does not exist"
+            file_path = os.path.join(self.disk_path, filename)
+            try:
+                os.remove(file_path)
+                del self.virtual_disk[filename]
+                self._save_disk()
+                return f"Deleted {filename}"
+            except OSError as e:
+                return f"Error deleting {filename}: {e}"
 
     def set_var(self, var_name, value):
         """Set a variable in memory."""
@@ -197,6 +228,8 @@ class VirtualNode:
                     print(self.trunc(command[1], size))
                 elif cmd == "send" and len(command) == 3:
                     print(self.send(command[1], command[2]))
+                elif cmd == "del" and len(command) == 2:
+                    print(self.del_file(command[1]))
                 elif cmd == "set" and len(command) == 3:
                     print(self.set_var(command[1], command[2]))
                 elif cmd == "get" and len(command) == 2:
@@ -207,7 +240,7 @@ class VirtualNode:
                     print(self.stop())
                     break
                 else:
-                    print("Invalid command. Use: ls, touch <filename> [size], trunc <filename> [size], send <filename> <ip_address>, set <var> <value>, get <var>, add <var1> <var2>, stop")
+                    print("Invalid command. Use: ls, touch <filename> [size], trunc <filename> [size], send <filename> <ip_address>, del <filename|all>, set <var> <value>, get <var>, add <var1> <var2>, stop")
             except EOFError:
                 print("\nEOF detected. Stopping VM.")
                 print(self.stop())
