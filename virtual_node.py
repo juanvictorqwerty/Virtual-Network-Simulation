@@ -1,22 +1,6 @@
 import os
 import json
-import ftplib
-from pyftpdlib.authorizers import DummyAuthorizer
-from pyftpdlib.handlers import FTPHandler
-from pyftpdlib.servers import FTPServer
-import threading
-import tempfile
-
-class CustomFTPHandler(FTPHandler):
-    def on_file_received(self, file_path):
-        """Called when a file is received via STOR command."""
-        filename = os.path.basename(file_path)
-        if filename != "disk_metadata.json":  # Exclude metadata file
-            size = os.path.getsize(file_path)
-            # The VirtualNode instance is attached to the server instance.
-            self.server.node.virtual_disk[filename] = size
-            self.server.node._save_disk()
-            print(f"Updated virtual_disk with {filename}: {size} bytes")
+from virtual_network import VirtualNetwork
 
 class VirtualNode:
     def __init__(self, name, disk_path, ip_address, ftp_port):
@@ -33,9 +17,9 @@ class VirtualNode:
             "192.168.1.2": {"disk_path": "./assets/node2/", "ftp_port": 2122},
             "192.168.1.3": {"disk_path": "./assets/node3/", "ftp_port": 2123}
         }  # Mapping of IP addresses to disk paths and FTP ports
-        self.ftp_server = None
+        self.network = VirtualNetwork()
         self._initialize_disk()
-        self._start_ftp_server()
+        self.network.start_ftp_server(self, ip_address, ftp_port, disk_path)
         self.start()  # Automatically start the VM on initialization
 
     def _initialize_disk(self):
@@ -77,84 +61,11 @@ class VirtualNode:
         used_storage = sum(self.virtual_disk.values())
         return used_storage + size <= self.total_storage
 
-    def _check_target_storage(self, target_ip, size):
-        """Check if the target node has enough storage via FTP."""
-        try:
-            ftp = ftplib.FTP()
-            ftp.connect(host="127.0.0.1", port=self.ip_map[target_ip]["ftp_port"])
-            ftp.login(user="user", passwd="password")
-            # List files to calculate used storage
-            files = []
-            ftp.dir(lambda x: files.append(x))
-            used_storage = 0
-            for line in files:
-                parts = line.split()
-                if len(parts) > 4 and parts[0].startswith("-"):
-                    file_size = int(parts[4])
-                    if parts[-1] != "disk_metadata.json":
-                        used_storage += file_size
-            ftp.quit()
-            return used_storage + size <= self.total_storage
-        except Exception as e:
-            print(f"Error checking storage on {target_ip}: {e}")
-            return False
-
-    def _start_ftp_server(self):
-        """Start an FTP server for this node."""
-        authorizer = DummyAuthorizer()
-        authorizer.add_user("user", "password", self.disk_path, perm="elradfmw")
-        handler = CustomFTPHandler
-        handler.authorizer = authorizer
-        self.ftp_server = FTPServer(("0.0.0.0", self.ftp_port), handler)
-        # Pass the VirtualNode instance to the server instance,
-        # so it can be accessed by the handler.
-        self.ftp_server.node = self
-        ftp_thread = threading.Thread(target=self.ftp_server.serve_forever, daemon=True)
-        ftp_thread.start()
-        print(f"FTP server started on {self.ip_address}:{self.ftp_port}")
-
     def send(self, filename, target_ip):
-        """Send a file to another node's disk using FTP."""
+        """Send a file to another node's disk using the VirtualNetwork."""
         if not self.is_running:
             return f"Error: VM {self.name} is not running"
-        if filename not in self.virtual_disk:
-            return f"Error: File {filename} does not exist"
-        if target_ip not in self.ip_map:
-            return f"Error: Target IP {target_ip} not found"
-        if target_ip == self.ip_address:
-            return f"Error: Cannot send file to self"
-        
-        size = self.virtual_disk[filename]
-        
-        # Check if target has enough storage
-        if not self._check_target_storage(target_ip, size):
-            return f"Error: Not enough storage on {target_ip}'s disk"
-        
-        # Create a temporary file with the content
-        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-            temp_file.write(b"\0" * size)
-            temp_file_path = temp_file.name
-        
-        try:
-            # Connect to target FTP server
-            ftp = ftplib.FTP()
-            ftp.connect(host="127.0.0.1", port=self.ip_map[target_ip]["ftp_port"])
-            ftp.login(user="user", passwd="password")
-            # Check if file already exists
-            file_list = ftp.nlst()
-            if filename in file_list:
-                ftp.quit()
-                os.unlink(temp_file_path)
-                return f"Error: File {filename} already exists on {target_ip}"
-            # Upload file
-            with open(temp_file_path, 'rb') as f:
-                ftp.storbinary(f"STOR {filename}", f)
-            ftp.quit()
-            os.unlink(temp_file_path)
-            return f"Sent {filename} ({size} bytes) to {target_ip}"
-        except Exception as e:
-            os.unlink(temp_file_path)
-            return f"Error sending file to {target_ip}: {e}"
+        return self.network.send_file(filename, self.ip_address, target_ip, self.virtual_disk)
 
     def start(self):
         """Start the virtual machine."""
@@ -169,9 +80,7 @@ class VirtualNode:
             return f"VM {self.name} is already stopped"
         self.is_running = False
         self._save_disk()
-        if self.ftp_server:
-            self.ftp_server.close_all()
-            print(f"FTP server stopped for {self.name}")
+        self.network.stop_ftp_server(self.ip_address)
         return f"VM {self.name} stopped"
 
     def ls(self):
